@@ -111,7 +111,53 @@ curl -X POST http://localhost:5165/api/daily-trends/run \
   -d '{"keywords":["glassmorphism","bento grid","scroll reveal"],"summary":"...","sourceUrls":["https://..."],"maxItems":5}'
 ```
 
-## 7. (Tuỳ chọn) Tự động chạy app mỗi ngày bằng Windows Task Scheduler
+## 7. (Tuỳ chọn) Chạy bằng Docker
+
+Dự án có sẵn `Dockerfile` (multi-stage, runtime image gọn) + `docker-compose.yml`.
+
+**Yêu cầu:** Docker Desktop / engine có hỗ trợ .NET 10 image.
+
+**Xây image:**
+```bash
+docker build -t uianimate:latest .
+```
+
+**Chạy bằng Docker Compose (khuyến nghị):**
+```bash
+# Tạo thư mục config rồi mount cấu hình ra ngoài (nếu chưa có)
+mkdir config
+cp admin-config.json config/   # tuỳ chọn
+
+docker compose up -d --build
+```
+App chạy tại `http://localhost:5165`. Cổng có thể đổi trong `docker-compose.yml` (phần `ports`).
+
+**Chạy bằng `docker run` trực tiếp:**
+```bash
+docker run -d --name uianimate -p 5165:5165 \
+  -e ConnectionStrings__MongoDb="mongodb+srv://USER:PASS@cluster0.xxx.mongodb.net/?appName=Cluster0" \
+  -e AdminSettings__MasterPassword="duypro173" \
+  -e Ai__ApiKey="..." \
+  -v "$PWD/config:/app/config" \
+  uianimate:latest
+```
+
+**Lưu ý quan trọng khi container hoá:**
+- `.dockerignore` loại `appsettings.json`, `admin-config.json` ra khỏi image để **tránh lộ
+  connection string / admin password / API key** trong layer image.
+- Cấu hình nhạy cảm nên truyền qua **biến môi trường** (kí pháp `Section__Key`, ví dụ
+  `ConnectionStrings__MongoDb`, `AdminSettings__MasterPassword`, `Ai__ApiKey`).
+- File `admin-config.json` (cấu hình AI/automation user chỉnh ở Settings) là file **runtime** —
+  nên để ngoài container qua volume (`-v ./config:/app/config`). App sẽ dùng file trong
+  `/app/config` nếu tồn tại (xem `AdminConfigService`), nếu không sẽ fallback về `IConfiguration`.
+- Trong container `Program.cs` nạp `admin-config.json` từ thư mục làm việc (`/app`), nên nếu bạn
+  muốn giữ nguyên hành vi này, hãy mount file vào `/app` (thay vì `/app/config`):
+  ```bash
+  -v "$PWD/admin-config.json:/app/admin-config.json"
+  ```
+- Cổng mặc định trong image là `http://+:5165` (Production, đúng khớp launch profile http).
+
+## 8. (Tuỳ chọn) Tự động chạy app mỗi ngày bằng Windows Task Scheduler
 
 1. Mở Task Scheduler → Create Basic Task → tên `UIAnimateApp`.
 2. Trigger: Daily, 07:50 (trước cron 08:00).
@@ -120,7 +166,7 @@ curl -X POST http://localhost:5165/api/daily-trends/run \
    - Arguments: `-NoProfile -Command "Set-Location 'D:\UI-UX pro\UI-UX pro'; dotnet run --launch-profile http"`
 4. Bật "Run whether user is logged on or not".
 
-## 8. Bộ prompt (nếu muốn tái tạo ở agent khác / nơi khác)
+## 9. Bộ prompt (nếu muốn tái tạo ở agent khác / nơi khác)
 
 ### Prompt gốc xây dựng app (đã thực hiện)
 

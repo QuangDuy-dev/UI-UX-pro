@@ -1,0 +1,20 @@
+services:
+  uianimate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: uianimate:latest
+    container_name: uianimate
+    ports:
+      - "5165:5165"
+    environment:
+      # Bỏ comment và điền giá trị thật của bạn (KHÔNG commit các secret này)
+      ASPNETCORE_ENVIRONMENT: Production
+      # ConnectionStrings__MongoDb: mongodb+srv://USER:PASS@cluster0.xxx.mongodb.net/?appName=Cluster0
+      # AdminSettings__MasterPassword: "doi-mat-khau"
+      # Ai__ApiKey: "tu-khoa-cua-ban"
+      # ApiSecurity__AgentKey: ""
+    volumes:
+      # Mount thư mục cấu hình AI/automation ra ngoài để user chỉnh trên host
+      - ./config:/app/config
+    restart: unless-stopped

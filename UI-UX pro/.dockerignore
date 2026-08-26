@@ -1,0 +1,26 @@
+# Build artifacts
+bin/
+obj/
+
+# Git
+.git/
+.gitignore
+
+# IDE / editor
+.vs/
+.vscode/
+*.user
+
+# Runtime config chứa thông tin nhạy cảm — KHÔNG build vào image.
+# Khi chạy container hãy mount riêng (volume) hoặc truyền qua env var.
+appsettings.json
+appsettings.Development.json
+admin-config.json
+
+# Logs / temp
+*.log
+*.tmp
+Thumbs.db
+
+# OS
+.DS_Store
