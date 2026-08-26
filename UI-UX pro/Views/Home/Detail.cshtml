@@ -1,0 +1,173 @@
+@model AnimationItem
+@{
+    ViewData["Title"] = Model.Name;
+    var related = ViewData["Related"] as List<AnimationItem> ?? new List<AnimationItem>();
+    var srcDoc = UI_UX_pro.Services.PreviewBuilder.BuildSrcdoc(Model);
+    var srcLabel = Model.Source switch
+    {
+        AnimationSource.Template => "template",
+        AnimationSource.User => "user",
+        AnimationSource.Ai => "ai",
+        AnimationSource.Daily => "daily",
+        _ => "misc"
+    };
+}
+
+<section class="container detail-page">
+    <nav class="crumbs">
+        <a asp-controller="Home" asp-action="Index">Gallery</a>
+        <span>›</span>
+        <a asp-controller="Home" asp-action="Index" asp-route-category="@Model.CategorySlug">@Model.CategoryName</a>
+        <span>›</span>
+        <span class="crumb-here">@Model.Name</span>
+    </nav>
+
+    <div class="detail-grid">
+        <div class="detail-preview">
+            <iframe id="mainFrame" sandbox="allow-scripts" scrolling="no" srcdoc="@Html.Raw(srcDoc)"></iframe>
+        </div>
+        <aside class="detail-info">
+            <div class="info-chip-row">
+                <span class="cat-chip">@Model.CategoryName</span>
+                <span class="src-chip src-@srcLabel">@srcLabel</span>
+            </div>
+            <h1>@Model.Name</h1>
+            <p class="info-desc">@Model.Description</p>
+
+            @if (Model.Tags.Count > 0)
+            {
+                <div class="tag-row">
+                    @foreach (var t in Model.Tags)
+                    {
+                        <a class="tag" asp-controller="Home" asp-action="Index" asp-route-q="@t">#@t</a>
+                    }
+                </div>
+            }
+
+            @if (Model.TrendKeywords.Count > 0)
+            {
+                <div class="trend-row">
+                    <span class="trend-label">🔥 Trend:</span>
+                    @foreach (var k in Model.TrendKeywords)
+                    {
+                        <span class="trend-kw">@k</span>
+                    }
+                </div>
+            }
+
+            <div class="stat-row">
+                <span class="stat">👁 <b id="viewCount">@Model.ViewCount</b> views</span>
+                <span class="stat">♥ <b id="likeCount">@Model.LikeCount</b> likes</span>
+                <span class="stat">📅 @Model.CreatedAt.ToString("MMM d, yyyy")</span>
+            </div>
+
+            <div class="info-actions">
+                <button class="btn-primary" data-copy="all" data-slug="@Model.Slug">📋 Copy all code</button>
+                <button class="btn-ghost" data-like="@Model.Id" data-slug="@Model.Slug">♥ Like</button>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(Model.TrendSourceUrl))
+            {
+                <p class="src-note">Nguồn trend: <a href="@Model.TrendSourceUrl" target="_blank" rel="noopener">@Model.TrendSourceUrl</a></p>
+            }
+        </aside>
+    </div>
+
+    <section class="code-section">
+        <div class="code-head">
+            <h2>Code</h2>
+            <div class="code-tabs" id="codeTabs">
+                <button class="code-tab active" data-tab="html">HTML</button>
+                <button class="code-tab" data-tab="css">CSS</button>
+                <button class="code-tab" data-tab="js">JS</button>
+            </div>
+        </div>
+
+        <div class="code-panel active" data-panel="html">
+            <div class="code-toolbar">
+                <span>index.html</span>
+                <button class="copy-btn" data-copy-target="html">Copy HTML</button>
+            </div>
+            <pre><code id="codeHtml">@Html.Raw(System.Web.HttpUtility.HtmlEncode(Model.Html))</code></pre>
+        </div>
+        <div class="code-panel" data-panel="css">
+            <div class="code-toolbar">
+                <span>style.css</span>
+                <button class="copy-btn" data-copy-target="css">Copy CSS</button>
+            </div>
+            <pre><code id="codeCss">@Html.Raw(System.Web.HttpUtility.HtmlEncode(Model.Css))</code></pre>
+        </div>
+        <div class="code-panel" data-panel="js">
+            <div class="code-toolbar">
+                <span>script.js</span>
+                <button class="copy-btn" data-copy-target="js">Copy JS</button>
+            </div>
+            <pre><code id="codeJs">@Html.Raw(System.Web.HttpUtility.HtmlEncode(Model.Js))</code></pre>
+        </div>
+    </section>
+
+    @if (related.Count > 0)
+    {
+        <section class="related">
+            <h2>Related components</h2>
+            <div class="grid">
+                @foreach (var item in related)
+                {
+                    <partial name="_AnimationCard" model="item" />
+                }
+            </div>
+        </section>
+    }
+</section>
+
+@section Scripts {
+    <script>
+        (function () {
+            const panels = {
+                html: @Html.Raw(Json.Serialize(Model.Html)),
+                css: @Html.Raw(Json.Serialize(Model.Css)),
+                js: @Html.Raw(Json.Serialize(Model.Js))
+            };
+
+            // Tabs
+            document.getElementById('codeTabs').addEventListener('click', e => {
+                const btn = e.target.closest('.code-tab');
+                if (!btn) return;
+                document.querySelectorAll('.code-tab').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.code-panel').forEach(p => p.classList.remove('active'));
+                btn.classList.add('active');
+                document.querySelector('.code-panel[data-panel="' + btn.dataset.tab + '"]').classList.add('active');
+            });
+
+            // Copy
+            document.querySelectorAll('.copy-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const key = btn.dataset.copyTarget;
+                    await UIAnimate.copyText(panels[key] || '', btn);
+                });
+            });
+
+            const allBtn = document.querySelector('[data-copy="all"]');
+            if (allBtn) {
+                allBtn.addEventListener('click', async () => {
+                    const text = '<!-- ' + '@Model.Name' + ' -->\n\n<style>\n' + panels.css + '\n</style>\n\n' + panels.html + '\n\n<script>\n' + panels.js + '\n<\/script>';
+                    await UIAnimate.copyText(text, allBtn);
+                });
+            }
+
+            // Like
+            document.querySelectorAll('[data-like]').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const id = btn.dataset.like;
+                    const res = await fetch('/api/animations/' + id + '/like', { method: 'POST' });
+                    if (res.ok) {
+                        const el = document.getElementById('likeCount');
+                        el.textContent = parseInt(el.textContent || '0') + 1;
+                        btn.classList.add('liked');
+                        btn.textContent = '♥ Liked';
+                    }
+                });
+            });
+        })();
+    </script>
+}

@@ -1,0 +1,45 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - UIAnimate Gallery</title>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+    <header class="site-header">
+        <div class="container header-inner">
+            <a class="brand" asp-controller="Home" asp-action="Index">
+                <span class="brand-mark">✦</span> UIAnimate
+            </a>
+            <nav class="main-nav">
+                <a asp-controller="Home" asp-action="Index">Gallery</a>
+                <a asp-controller="Upload" asp-action="Index">Upload</a>
+                <a asp-controller="Home" asp-action="Privacy" class="nav-muted">Privacy</a>
+            </nav>
+            <a class="btn-upload" asp-controller="Upload" asp-action="Index">＋ Upload</a>
+        </div>
+    </header>
+
+    @if (TempData["Flash"] is string flash)
+    {
+        <div class="flash container">@flash</div>
+    }
+
+    <main role="main" class="site-main">
+        @RenderBody()
+    </main>
+
+    <footer class="site-footer">
+        <div class="container footer-inner">
+            <span>✦ UIAnimate — copy-paste animated components, refreshed daily from UI/UX trends.</span>
+            <span class="footer-links">
+                <a asp-controller="Home" asp-action="Privacy">Privacy</a>
+            </span>
+        </div>
+    </footer>
+
+    <script src="~/js/site.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

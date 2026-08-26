@@ -1,0 +1,22 @@
+# Build results
+bin/
+obj/
+*.user
+
+# IDE
+.vs/
+.idea/
+*.suo
+*.userosscache
+
+# Runtime
+appsettings.Production.json
+*.log
+
+# ===== BẢO MẬT: không commit file chứa bí mật =====
+# admin-config.json chứa API key LLM cá nhân (do user nhập ở trang Settings)
+admin-config.json
+
+# appsettings.json chứa connection string MongoDB (có password) + master password admin.
+# Nếu repo này public, dời các giá trị nhạy cảm sang user-secrets và bỏ comment dòng dưới:
+# appsettings.json

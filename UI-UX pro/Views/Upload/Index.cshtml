@@ -1,0 +1,106 @@
+@model UI_UX_pro.Controllers.UploadViewModel
+@{
+    ViewData["Title"] = "Upload Animation";
+    var cats = ViewData["Categories"] as List<Category> ?? new List<Category>();
+}
+
+<section class="container upload-page">
+    <div class="upload-head">
+        <h1>＋ Upload your animation</h1>
+        <p>Dán HTML/CSS/JS của component bạn — xem trước live ngay bên phải, rồi publish vào gallery.</p>
+    </div>
+
+    <div class="upload-grid">
+        <form class="upload-form" method="post" asp-controller="Upload" asp-action="Index">
+            <div asp-validation-summary="ModelOnly" class="form-error"></div>
+
+            <div class="field">
+                <label asp-for="Name">Tên component *</label>
+                <input asp-for="Name" class="input" placeholder="VD: Glowing Button" />
+                <span asp-validation-for="Name" class="field-error"></span>
+            </div>
+
+            <div class="field-row">
+                <div class="field">
+                    <label asp-for="CategorySlug">Danh mục</label>
+                    <select asp-for="CategorySlug" class="input">
+                        @foreach (var c in cats)
+                        {
+                            <option value="@c.Slug">@c.Icon @c.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label asp-for="Tags">Tags (phân cách bằng dấu phẩy)</label>
+                    <input asp-for="Tags" class="input" placeholder="button, gradient, hover" />
+                </div>
+            </div>
+
+            <div class="field">
+                <label asp-for="Description">Mô tả ngắn</label>
+                <input asp-for="Description" class="input" placeholder="Mô tả animation này làm gì…" />
+            </div>
+
+            <div class="field">
+                <label asp-for="Html">HTML *</label>
+                <textarea asp-for="Html" class="input code-input" id="uHtml" rows="8"
+                          placeholder="&lt;button class=&quot;glow&quot;&gt;Hover me&lt;/button&gt;"></textarea>
+                <span asp-validation-for="Html" class="field-error"></span>
+            </div>
+
+            <div class="field">
+                <label asp-for="Css">CSS</label>
+                <textarea asp-for="Css" class="input code-input" id="uCss" rows="10"
+                          placeholder=".glow { … }"></textarea>
+            </div>
+
+            <div class="field">
+                <label asp-for="Js">JavaScript</label>
+                <textarea asp-for="Js" class="input code-input" id="uJs" rows="8"
+                          placeholder="document.querySelector('.glow').addEventListener(…);"></textarea>
+            </div>
+
+            <button class="btn-primary big" type="submit">🚀 Publish to Gallery</button>
+        </form>
+
+        <div class="upload-preview">
+            <div class="preview-head">
+                <span>Live preview</span>
+                <button type="button" class="btn-ghost sm" id="refreshPreview">⟳ Refresh</button>
+            </div>
+            <iframe id="uploadFrame" sandbox="allow-scripts" scrolling="no"></iframe>
+            <p class="preview-tip">💡 Preview tự cập nhật khi bạn gõ. Code chạy trong iframe sandbox — an toàn để thử nghiệm.</p>
+        </div>
+    </div>
+</section>
+
+@section Scripts {
+    <script>
+        (function () {
+            const frame = document.getElementById('uploadFrame');
+            const html = document.getElementById('uHtml');
+            const css = document.getElementById('uCss');
+            const js = document.getElementById('uJs');
+
+            let timer;
+            const build = () => {
+                const doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
+                    (css.value || '') +
+                    '</style></head><body>' +
+                    (html.value || '') +
+                    '<script>' + (js.value || '') + '<\/script>' +
+                    '</body></html>';
+                frame.srcdoc = doc;
+            };
+
+            [html, css, js].forEach(el => {
+                el.addEventListener('input', () => {
+                    clearTimeout(timer);
+                    timer = setTimeout(build, 350);
+                });
+            });
+            document.getElementById('refreshPreview').addEventListener('click', build);
+            build();
+        })();
+    </script>
+}

@@ -1,0 +1,135 @@
+@model SettingsViewModel
+@{
+    ViewData["Title"] = "Settings & Automation";
+    var secretRoute = (string)(ViewData["SecretRoute"] ?? "/Admin-Secret-Manager-Key-999");
+    var masterPassword = (string?)(ViewData["MasterPassword"]);
+}
+<section class="container admin-page">
+    <div class="admin-head">
+        <h1>⚙️ Settings &amp; Automation</h1>
+        <div class="admin-actions">
+            <a class="btn-ghost" asp-controller="Admin" asp-action="Index">← Dashboard</a>
+            <a class="btn-ghost" asp-controller="Admin" asp-action="Trends">📊 Trend reports</a>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(masterPassword))
+    {
+        <div class="settings-note">
+            🔑 Master password hiện tại: <code>@masterPassword</code> — đổi trong <code>appsettings.json → AdminSettings:MasterPassword</code>.
+        </div>
+    }
+
+    <form method="post" asp-controller="Admin" asp-action="Settings" class="settings-form">
+        @Html.AntiForgeryToken()
+
+        <div class="settings-section">
+            <h2 class="settings-title">🤖 AI &amp; Automation</h2>
+            <div class="switch-row">
+                <div>
+                    <strong>Bật tự động (Auto-update)</strong>
+                    <p class="hint">Khi bật, cron job hàng ngày sẽ tìm UI/UX trends &amp; thêm animation mới.</p>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" asp-for="AutoEnabled" />
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="switch-row">
+                <div>
+                    <strong>Dùng LLM sinh code (Ai:Enabled)</strong>
+                    <p class="hint">Nếu tắt, sẽ dùng template library có sẵn thay vì gọi API LLM.</p>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" asp-for="AiEnabled" />
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <h2 class="settings-title">🧠 LLM Provider</h2>
+            <div class="field-grid">
+                <div class="field">
+                    <label for="AiProvider">Provider</label>
+                    <select id="AiProvider" asp-for="AiProvider" class="input">
+                        <option value="openai">OpenAI</option>
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="anthropic">Anthropic (Claude)</option>
+                        <option value="other">Khác (OpenAI-compatible)</option>
+                    </select>
+                <div class="field">
+                    <label for="AiModel">Model</label>
+                    <input id="AiModel" asp-for="AiModel" class="input" placeholder="gpt-4o-mini / claude-sonnet-4-20250514" />
+                </div>
+            </div>
+
+            <div class="field">
+                <label for="AiApiKey">API Key (cá nhân)</label>
+                <input id="AiApiKey" asp-for="AiApiKey" class="input" type="password" placeholder="sk-... (để trống nếu chưa dùng LLM)" />
+                <p class="hint">Key được lưu trong file <code>admin-config.json</code> ngoài source code, không hiển thị ở trang chủ.</p>
+            </div>
+
+            <div class="field">
+                <label for="AiEndpoint">API Endpoint</label>
+                <input id="AiEndpoint" asp-for="AiEndpoint" class="input" placeholder="https://api.openai.com/v1/chat/completions" />
+            </div>
+
+            <div class="field">
+                <label for="MaxItemsPerRun">Số animation sinh mỗi lần chạy (MaxItems)</label>
+                <input id="MaxItemsPerRun" asp-for="MaxItemsPerRun" type="number" min="1" max="20" class="input" />
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <h2 class="settings-title">🎯 Trend Keywords &amp; Lưu ý</h2>
+            <div class="field">
+                <label for="TrendKeywords">Keywords xu hướng (phân cách bằng dấu phẩy)</label>
+                <textarea id="TrendKeywords" asp-for="TrendKeywords" class="input" rows="2" placeholder="glassmorphism, micro-interaction, 3d tilt, ..."></textarea>
+            </div>
+            <div class="field">
+                <label for="Summary">Ghi chú / Summary (tuỳ chọn, hiển thị trong trend report)</label>
+                <textarea id="Summary" asp-for="Summary" class="input" rows="2" placeholder="Tóm tắt xu hướng đang hot..."></textarea>
+            </div>
+        </div>
+
+        <div class="settings-actions">
+            <button class="btn-primary" type="submit">💾 Lưu cài đặt</button>
+        </div>
+    </form>
+
+    <div class="settings-actions run-now-block">
+        <form method="post" asp-controller="Admin" asp-action="RunTrendJob" class="run-now">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="keywords" value="" />
+            <button class="btn-primary btn-run" type="submit">⚡ Run Trend Job Now</button>
+        </form>
+        <p class="hint">Bấm để quét trend + gọi LLM + tự sinh code HTML/CSS/JS và đẩy vào MongoDB ngay lập tức (không cần chờ cron).</p>
+    </div>
+
+    <div class="settings-tip">
+        <strong>💡 Đã lưu?</strong> Chạy job ngay sẽ dùng cấu hình vừa lưu. Nếu chưa nhấn “Lưu cài đặt”, hãy lưu trước rồi mới chạy.
+    </div>
+</section>
+
+<script>
+    // Tự đổi endpoint theo provider khi user chọn (chỉ khi endpoint đang là giá trị mặc định)
+    (function () {
+        const provider = document.getElementById('AiProvider');
+        const endpoint = document.getElementById('AiEndpoint');
+        const defaults = {
+            openai: 'https://api.openai.com/v1/chat/completions',
+            deepseek: 'https://api.deepseek.com/v1/chat/completions',
+            anthropic: 'https://api.anthropic.com/v1/messages'
+        };
+        const known = new Set(Object.values(defaults));
+        if (!provider || !endpoint) return;
+        provider.addEventListener('change', function () {
+            const current = endpoint.value.trim();
+            // Chỉ ghi đè khi endpoint hiện tại là 1 trong các giá trị mặc định đã biết
+            if (known.has(current) || current === '') {
+                endpoint.value = defaults[this.value] || '';
+            }
+        });
+    })();
+</script>

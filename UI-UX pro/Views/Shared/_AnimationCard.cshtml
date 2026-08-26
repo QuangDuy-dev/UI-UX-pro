@@ -1,0 +1,36 @@
+@model AnimationItem
+@{
+    var srcDoc = UI_UX_pro.Services.PreviewBuilder.BuildSrcdoc(Model);
+    var srcLabel = Model.Source switch
+    {
+        AnimationSource.Template => "template",
+        AnimationSource.User => "user",
+        AnimationSource.Ai => "ai",
+        AnimationSource.Daily => "daily",
+        _ => "misc"
+    };
+}
+<article class="anim-card" data-slug="@Model.Slug">
+    <a class="preview" asp-controller="Home" asp-action="Detail" asp-route-slug="@Model.Slug" title="@Model.Name">
+        <iframe sandbox="allow-scripts" loading="lazy" scrolling="no" srcdoc="@Html.Raw(srcDoc)"></iframe>
+        <span class="preview-hint">Xem & sao chép →</span>
+    </a>
+    <div class="card-body">
+        <div class="card-top">
+            <span class="cat-chip">@Model.CategoryName</span>
+            <span class="src-chip src-@srcLabel">@srcLabel</span>
+        </div>
+        <h3 class="card-title">
+            <a asp-controller="Home" asp-action="Detail" asp-route-slug="@Model.Slug">@Model.Name</a>
+        </h3>
+        @if (!string.IsNullOrWhiteSpace(Model.Description))
+        {
+            <p class="card-desc">@Model.Description</p>
+        }
+        <div class="card-stats">
+            <span>👁 @Model.ViewCount</span>
+            <span class="like-count" data-id="@Model.Id">♥ @Model.LikeCount</span>
+            <span class="card-date" title="@Model.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC">@Model.CreatedAt.ToString("MMM d")</span>
+        </div>
+    </div>
+</article>

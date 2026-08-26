@@ -1,0 +1,55 @@
+@model AdminLoginViewModel
+@{
+    Layout = null;
+    var secretRoute = Context.Request.Path.Value?.Split('/')[1] ?? "Admin";
+    var error = ViewData["Error"] as string;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Login — UIAnimate</title>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <style>
+        body { display: grid; place-items: center; min-height: 100vh; background: #0f1020; }
+        .login-card { width: 340px; background: #171833; border: 1px solid #2a2c4a; border-radius: 14px; padding: 30px 28px; box-shadow: 0 20px 50px rgba(0,0,0,.4); }
+        .login-head { text-align: center; margin-bottom: 22px; }
+        .login-head .lock { font-size: 34px; display: block; margin-bottom: 8px; }
+        .login-head h1 { font-size: 18px; margin: 0; color: #eef; }
+        .login-head p { margin: 6px 0 0; color: #8b8db0; font-size: 12px; }
+        .field { margin-bottom: 16px; }
+        .field label { display: block; font-size: 12px; color: #aab0d8; margin-bottom: 6px; }
+        .field input { width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid #33365a; background: #0f1022; color: #eef; font-size: 14px; }
+        .field input:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.2); }
+        .btn-submit { width: 100%; padding: 12px; border: none; border-radius: 8px; background: linear-gradient(135deg,#6366f1,#8b5cf6); color: #fff; font-weight: 700; font-size: 14px; cursor: pointer; }
+        .btn-submit:hover { filter: brightness(1.1); }
+        .error-msg { color: #f87171; font-size: 12px; text-align: center; margin: 10px 0 0; }
+        .login-foot { text-align: center; margin-top: 18px; font-size: 11px; color: #5b5e85; }
+    </style>
+</head>
+<body>
+    <form class="login-card" method="post" asp-controller="Admin" asp-action="Login">
+        @Html.AntiForgeryToken()
+        <div class="login-head">
+            <span class="lock">🔒</span>
+            <h1>Admin Access</h1>
+            <p>Nhập mật khẩu quản trị để tiếp tục</p>
+        </div>
+
+        <div class="field">
+            <label for="Password">Master Password</label>
+            <input id="Password" name="Password" type="password" placeholder="••••••••••" autocomplete="current-password" required autofocus />
+        </div>
+
+        <button class="btn-submit" type="submit">Unlock Admin</button>
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <p class="error-msg">@error</p>
+        }
+
+        <p class="login-foot">Truy cập không hợp lệ sẽ bị từ chối.</p>
+    </form>
+</body>
+</html>

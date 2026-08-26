@@ -1,0 +1,69 @@
+@model List<TrendReport>
+@{
+    ViewData["Title"] = "Trend Reports";
+}
+
+<section class="container admin-page">
+    <div class="admin-head">
+        <h1>📊 Daily trend reports</h1>
+        <div class="admin-actions">
+            <a class="btn-ghost" asp-controller="Admin" asp-action="Settings">⚙️ Settings &amp; Automation</a>
+            <a class="btn-ghost" asp-controller="Admin" asp-action="Index">Dashboard</a>
+        </div>
+    </div>
+
+    <p class="admin-note">
+        Mỗi báo cáo là một lần cron chạy: agent tìm UI/UX trends trên web → gọi
+        <code>POST /api/daily-trends/run</code> → app sinh & lưu animation mới.
+    </p>
+
+    @if (Model.Count == 0)
+    {
+        <div class="empty-state">
+            <div class="empty-emoji">🗓️</div>
+            <h3>Chưa có báo cáo nào</h3>
+            <p>Bấm "Generate from trends" ở Admin hoặc đợi cron job hàng ngày chạy.</p>
+        </div>
+    }
+    else
+    {
+        <div class="report-list">
+            @foreach (var r in Model)
+            {
+                <div class="report-card">
+                    <div class="report-top">
+                        <span class="report-date">@r.RunDate.ToString("yyyy-MM-dd HH:mm") UTC</span>
+                        <span class="status-pill @(r.Status == "success" ? "ok" : r.Status == "error" ? "danger" : "warn")">@r.Status</span>
+                        <span class="report-count">+@r.GeneratedItemIds.Count components</span>
+                    </div>
+                    @if (r.Keywords.Count > 0)
+                    {
+                        <div class="tag-row">
+                            @foreach (var k in r.Keywords)
+                            {
+                                <span class="trend-kw">@k</span>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(r.Summary))
+                    {
+                        <p class="report-summary">@r.Summary</p>
+                    }
+                    @if (r.SourceUrls.Count > 0)
+                    {
+                        <div class="report-links">
+                            @foreach (var u in r.SourceUrls)
+                            {
+                                <a href="@u" target="_blank" rel="noopener">🔗 @u</a>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(r.Error))
+                    {
+                        <p class="report-error">⚠ @r.Error</p>
+                    }
+                </div>
+            }
+        </div>
+    }
+</section>

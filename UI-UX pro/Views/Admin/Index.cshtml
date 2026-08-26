@@ -1,0 +1,82 @@
+@model List<AnimationItem>
+@{
+    ViewData["Title"] = "Admin";
+    var total = (int)(ViewData["TotalItems"] ?? 0);
+    var views = (long)(ViewData["TotalViews"] ?? 0);
+    var likes = (long)(ViewData["TotalLikes"] ?? 0);
+    var daily = (int)(ViewData["DailyCount"] ?? 0);
+    var ai = (int)(ViewData["AiCount"] ?? 0);
+}
+
+<section class="container admin-page">
+    <div class="admin-head">
+        <h1>⚙️ Admin</h1>
+        <div class="admin-actions">
+            <a class="btn-ghost" asp-controller="Admin" asp-action="Settings">⚙️ Settings &amp; Automation</a>
+            <form method="post" asp-controller="Admin" asp-action="RunDaily" class="run-daily">
+                <input class="input" name="keywords" placeholder="Keywords (tuỳ chọn, phân cách bằng dấu phẩy)" />
+                <button class="btn-primary" type="submit">⚡ Generate from trends</button>
+            </form>
+            <a class="btn-ghost" asp-controller="Admin" asp-action="Trends">📊 Trend reports</a>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card"><span class="stat-num">@total</span><span class="stat-label">Components</span></div>
+        <div class="stat-card"><span class="stat-num">@views</span><span class="stat-label">Total views</span></div>
+        <div class="stat-card"><span class="stat-num">@likes</span><span class="stat-label">Total likes</span></div>
+        <div class="stat-card"><span class="stat-num">@daily</span><span class="stat-label">From daily trends</span></div>
+        <div class="stat-card"><span class="stat-num">@ai</span><span class="stat-label">AI generated</span></div>
+    </div>
+
+    <div class="table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Name</th><th>Category</th><th>Source</th><th>Views</th><th>Likes</th><th>Status</th><th>Created</th><th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in Model)
+                {
+                    var src = item.Source switch
+                    {
+                        AnimationSource.Template => "template",
+                        AnimationSource.User => "user",
+                        AnimationSource.Ai => "ai",
+                        AnimationSource.Daily => "daily",
+                        _ => "misc"
+                    };
+                    <tr>
+                        <td><a asp-controller="Home" asp-action="Detail" asp-route-slug="@item.Slug">@item.Name</a></td>
+                        <td><span class="cat-chip">@item.CategoryName</span></td>
+                        <td><span class="src-chip src-@src">@src</span></td>
+                        <td>@item.ViewCount</td>
+                        <td>@item.LikeCount</td>
+                        <td>
+                            @if (item.Status == ItemStatus.Published)
+                            {
+                                <span class="status-pill ok">Published</span>
+                            }
+                            else
+                            {
+                                <span class="status-pill muted">@item.Status</span>
+                            }
+                        </td>
+                        <td title="@item.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC">@item.CreatedAt.ToString("MMM d, yyyy")</td>
+                        <td class="row-actions">
+                            <form method="post" asp-controller="Admin" asp-action="TogglePublish">
+                                <input type="hidden" name="id" value="@item.Id" />
+                                <button class="mini-btn" title="Toggle publish">@(item.Status == ItemStatus.Published ? "Hide" : "Show")</button>
+                            </form>
+                            <form method="post" asp-controller="Admin" asp-action="Delete" onsubmit="return confirm('Xoá @item.Name?');">
+                                <input type="hidden" name="id" value="@item.Id" />
+                                <button class="mini-btn danger" title="Delete">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
