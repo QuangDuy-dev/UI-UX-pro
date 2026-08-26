@@ -27,5 +27,5 @@ ENV ASPNETCORE_URLS=http://+:5165
 # Copy kết quả publish
 COPY --from=build /app/publish .
 
-USER $APP_UID
+
 ENTRYPOINT ["dotnet", "UI-UX pro.dll"]
