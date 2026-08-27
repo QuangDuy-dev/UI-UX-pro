@@ -47,29 +47,64 @@ public class TrendService
             var admin = _adminConfig.Load(_config);
 
             var defaults = _config.GetSection("DailyTrend:DefaultKeywords").Get<List<string>>() ?? new List<string>();
-            if (report.Keywords.Count == 0)
-                report.Keywords = admin.TrendKeywords.Count > 0 ? admin.TrendKeywords : defaults;
+            var max = Math.Clamp(maxItems ?? admin.MaxItemsPerRun, 1, 20);
 
-            var max = maxItems ?? admin.MaxItemsPerRun;
-            max = Math.Clamp(max, 1, 20);
+            // Tải toàn bộ item hiện có 1 lần để chống trùng: theo tên chuẩn hoá, theo content hash,
+            // và đếm số lần mỗi template đã được dùng (giới hạn số biến thể).
+            var existing = await _animations.GetAllAsync(includeNonPublic: true);
+            var existingNames = new HashSet<string>(
+                existing.Select(x => AnimationService.NormalizeName(x.Name)), StringComparer.Ordinal);
+            var existingHashes = new HashSet<string>(
+                existing.Select(x => x.ContentHash).Where(h => !string.IsNullOrWhiteSpace(h)).Select(h => h!), StringComparer.Ordinal);
+            var templateUsage = BuildTemplateUsage(existing);
+
+            // Keywords đa dạng: giữ tối đa 2 keyword MỚI từ agent, phần còn lại lấy từ kho phong cách
+            // (DesignStyleLibrary) xoay vòng theo ngày, loại trừ style đã dùng trong 30 ngày gần nhất.
+            var recentKeywords = await GetRecentKeywordsAsync(days: 30);
+            var selectedKeywords = ResolveKeywords(keywords, admin.TrendKeywords, defaults, recentKeywords, max);
+            report.Keywords = selectedKeywords;
 
             // Bật AI chỉ khi user bật ở Settings (admin.AiEnabled).
             // Nếu LLM gọi lỗi (401 API key sai, 429, network...) thì tự fallback template
             // để job luôn sinh được animation, không bao giờ lộ lỗi 401 từ provider.
-            var (items, llmError) = admin.AiEnabled
-                ? await TryGenerateWithLlmAsync(report.Keywords, max)
-                : (GenerateFromTemplates(report.Keywords, max), (string?)null);
+            var skipped = new List<string>();
+            List<AnimationItem> items;
+            string? llmError = null;
 
+            if (admin.AiEnabled)
+            {
+                (items, llmError) = await TryGenerateWithLlmAsync(selectedKeywords, max);
+            }
+            else
+            {
+                items = GenerateFromTemplates(selectedKeywords, max, existingNames, existingHashes, templateUsage, skipped);
+            }
+
+            // Lưu với dedup THẬT: trùng tên chuẩn hoá HOẶC trùng nội dung (hash) -> BỎ QUA,
+            // không đổi slug thành -2, -3 rồi lưu tiếp như trước đây.
             var created = new List<string>();
+            var seenRunNames = new HashSet<string>(StringComparer.Ordinal);
+            var seenRunHashes = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var item in items)
             {
-                if (await _animations.SlugExistsAsync(item.Slug))
-                    item.Slug = await _animations.EnsureUniqueSlugAsync(item.Slug);
+                var norm = AnimationService.NormalizeName(item.Name);
+                var hash = AnimationService.ComputeContentHash(item.Html, item.Css, item.Js);
+                if (!seenRunNames.Add(norm) || !seenRunHashes.Add(hash) ||
+                    existingNames.Contains(norm) || existingHashes.Contains(hash))
+                {
+                    skipped.Add($"Trùng: {item.Name}");
+                    continue;
+                }
+
+                item.Slug = await _animations.EnsureUniqueSlugAsync(item.Slug);
                 await _animations.CreateAsync(item);
                 created.Add(item.Id.ToString());
             }
 
             report.GeneratedItemIds = created;
+            report.SkippedCount = skipped.Count;
+            report.SkippedReasons = skipped;
             report.Status = created.Count > 0
                 ? (string.IsNullOrWhiteSpace(llmError) ? "success" : "partial")
                 : "empty";
@@ -94,20 +129,124 @@ public class TrendService
         return await _db.TrendReports.Find(_ => true).SortByDescending(r => r.RunDate).Limit(limit).ToListAsync();
     }
 
-    private List<AnimationItem> GenerateFromTemplates(List<string> keywords, int max)
+    /// <summary>Gom các keyword/style đã dùng trong N ngày gần nhất (từ lịch sử trend reports).</summary>
+    private async Task<HashSet<string>> GetRecentKeywordsAsync(int days)
     {
+        var from = DateTime.UtcNow.AddDays(-days);
+        var reports = await _db.TrendReports.Find(r => r.RunDate >= from).ToListAsync();
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in reports)
+        foreach (var k in r.Keywords)
+            if (!string.IsNullOrWhiteSpace(k))
+                set.Add(k.Trim().ToLowerInvariant());
+        return set;
+    }
+
+    /// <summary>
+    /// Chọn keywords cho lần chạy: tối đa 2 keyword MỚI LẠ từ agent, lấp đầy bằng style chưa dùng
+    /// 30 ngày từ DesignStyleLibrary (xoay vòng theo ngày để mỗi ngày ra phong cách khác nhau).
+    /// </summary>
+    private static List<string> ResolveKeywords(
+        List<string>? agentKeywords,
+        List<string> adminKeywords,
+        List<string> defaults,
+        HashSet<string> recent,
+        int max)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddFresh(string? k)
+        {
+            k = k?.Trim();
+            if (string.IsNullOrWhiteSpace(k) || !seen.Add(k)) return;
+            if (!recent.Contains(k)) result.Add(k);
+        }
+
+        // 1) Tối đa 2 keyword mới lạ từ agent (không trùng style đã dùng 30 ngày)
+        foreach (var k in agentKeywords ?? new List<string>())
+        {
+            if (result.Count >= Math.Min(2, max)) break;
+            AddFresh(k);
+        }
+
+        // 2) Lấp đầy từ kho phong cách xoay vòng theo ngày
+        var pool = DesignStyleLibrary.PickRotation(recent, Math.Max(max, 8), DateTime.UtcNow.DayOfYear);
+        foreach (var k in pool)
+        {
+            if (result.Count >= max) break;
+            AddFresh(k);
+        }
+
+        // 3) Còn thiếu: cho phép dùng lại keyword (agent/admin/default) để đủ số lượng
+        foreach (var k in (agentKeywords ?? new List<string>()).Concat(adminKeywords).Concat(defaults))
+        {
+            if (result.Count >= max) break;
+            var key = k?.Trim();
+            if (!string.IsNullOrWhiteSpace(key) && seen.Add(key)) result.Add(key);
+        }
+
+        // 4) Hiếm khi vẫn rỗng: dùng thẳng pool (cho phép trùng)
+        if (result.Count == 0)
+        {
+            foreach (var k in pool)
+            {
+                if (result.Count >= max) break;
+                if (seen.Add(k)) result.Add(k);
+            }
+        }
+
+        return result.Take(max).ToList();
+    }
+
+    /// <summary>Đếm số lần mỗi template (theo tên gốc trước dấu " — ") đã xuất hiện trong DB.</summary>
+    private static Dictionary<string, int> BuildTemplateUsage(List<AnimationItem> existing)
+    {
+        var usage = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var x in existing)
+        {
+            var baseName = GetTemplateBaseName(x.Name);
+            usage[baseName] = usage.GetValueOrDefault(baseName) + 1;
+        }
+        return usage;
+    }
+
+    private static string GetTemplateBaseName(string name)
+    {
+        foreach (var sep in new[] { " — ", " – ", " - " })
+        {
+            var idx = name.IndexOf(sep, StringComparison.Ordinal);
+            if (idx > 0) return name[..idx].Trim();
+        }
+        return name.Trim();
+    }
+
+    private List<AnimationItem> GenerateFromTemplates(
+        List<string> keywords,
+        int max,
+        HashSet<string>? existingNames = null,
+        HashSet<string>? existingHashes = null,
+        Dictionary<string, int>? templateUsage = null,
+        List<string>? skipped = null)
+    {
+        const int maxVariantsPerTemplate = 3; // mỗi template tối đa 3 biến thể (gốc + 2 palette)
         var templates = TemplateLibrary.All.ToList();
         var selected = new List<AnimationTemplate>();
 
+        bool UsageOk(AnimationTemplate t) =>
+            templateUsage is null || templateUsage.GetValueOrDefault(t.Name) < maxVariantsPerTemplate;
+
+        // 1) Khớp keyword với template còn dùng được (chưa vượt số biến thể tối đa)
         foreach (var kw in keywords)
         {
             if (selected.Count >= max) break;
             var k = kw.ToLowerInvariant();
             var match = templates.FirstOrDefault(t =>
-                t.Name.ToLowerInvariant().Contains(k) ||
-                t.Tags.Any(tag => tag.ToLowerInvariant().Contains(k)) ||
-                k.Contains(t.CategorySlug) ||
-                t.CategoryName.ToLowerInvariant().Contains(k));
+                UsageOk(t) && (
+                    t.Name.ToLowerInvariant().Contains(k) ||
+                    t.Tags.Any(tag => tag.ToLowerInvariant().Contains(k)) ||
+                    t.CategorySlug.Contains(k) ||
+                    t.CategoryName.ToLowerInvariant().Contains(k)));
 
             if (match is not null)
             {
@@ -116,10 +255,35 @@ public class TrendService
             }
         }
 
+        // 2) Bổ sung: template chưa dùng, trải đều category (round-robin qua từng nhóm)
         if (selected.Count < max)
         {
-            foreach (var t in templates.Take(max - selected.Count))
+            var pool = templates.Where(UsageOk).ToList();
+            var byCategory = pool.GroupBy(t => t.CategorySlug).ToList();
+            var longest = byCategory.Count == 0 ? 0 : byCategory.Max(g => g.Count());
+            for (int i = 0; i < longest && selected.Count < max; i++)
+            {
+                foreach (var g in byCategory)
+                {
+                    if (selected.Count >= max) break;
+                    if (i < g.Count())
+                    {
+                        selected.Add(g.ElementAt(i));
+                        templates.Remove(g.ElementAt(i));
+                    }
+                }
+            }
+        }
+
+        // 3) Vẫn thiếu: cho phép dùng template đã vượt cap (chỉ khi hết lựa chọn mới)
+        if (selected.Count < max)
+        {
+            foreach (var t in templates)
+            {
+                if (selected.Count >= max) break;
                 selected.Add(t);
+                templates.Remove(t);
+            }
         }
 
         if (selected.Count == 0)
@@ -130,17 +294,29 @@ public class TrendService
             ("#22d3ee", "#6366f1", "#ec4899"),
             ("#f472b6", "#8b5cf6", "#3b82f6"),
             ("#34d399", "#14b8a6", "#0ea5e9"),
-            ("#fbbf24", "#f97316", "#ef4444")
+            ("#fbbf24", "#f97316", "#ef4444"),
+            ("#a78bfa", "#ec4899", "#f43f5e"),
+            ("#38bdf8", "#818cf8", "#c084fc"),
+            ("#fde047", "#f59e0b", "#dc2626"),
+            ("#6ee7b7", "#2dd4bf", "#6366f1")
         };
 
         var items = new List<AnimationItem>();
-        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var seenHashes = new HashSet<string>(StringComparer.Ordinal);
+        var keywordList = keywords.Count > 0 ? keywords : new List<string> { "animation" };
 
         foreach (var (tpl, i) in selected.Select((t, i) => (t, i)))
         {
-            var keyword = keywords.Count > 0 ? keywords[i % keywords.Count] : tpl.Tags[0];
+            if (items.Count >= max) break;
+            var keyword = keywordList[i % keywordList.Count];
             var name = $"{tpl.Name} — {ToTitle(keyword)}";
-            if (!usedNames.Add(name)) continue;
+            var norm = AnimationService.NormalizeName(name);
+            if (!seenNames.Add(norm) || (existingNames?.Contains(norm) ?? false))
+            {
+                skipped?.Add($"Trùng tên template: {name}");
+                continue;
+            }
 
             var (c1, c2, c3) = palettes[i % palettes.Length];
             var css = tpl.Css
@@ -164,6 +340,14 @@ public class TrendService
                 IsPublic = true,
                 TrendKeywords = new List<string>(keywords)
             };
+
+            var hash = AnimationService.ComputeContentHash(item.Html, item.Css, item.Js);
+            if (!seenHashes.Add(hash) || (existingHashes?.Contains(hash) ?? false))
+            {
+                skipped?.Add($"Trùng nội dung template: {name}");
+                continue;
+            }
+
             items.Add(item);
         }
 
@@ -204,21 +388,35 @@ public class TrendService
             return GenerateFromTemplates(keywords, max);
         }
 
+        // Chống trùng: LLM biết style nào đã dùng gần đây và component nào đã tồn tại trên web.
+        var recentKeywords = await GetRecentKeywordsAsync(days: 30);
+        var recentNames = await _animations.GetRecentNamesAsync(limit: 40);
+        var avoidStyles = string.Join(", ", recentKeywords.Take(25));
+        var avoidNames = string.Join("\n- ", recentNames.Take(40));
+
         var prompt =
-            "You are a senior UI/UX developer. Generate " + max +
-            " fresh, original, copy-paste-ready HTML/CSS/vanilla-JS animated components " +
-            "inspired by these current UI/UX trends: " + string.Join(", ", keywords) + "\n" +
+            "You are a senior UI/UX developer. Generate exactly " + max +
+            " BRAND-NEW, visually DISTINCT animated components — ONE component per style keyword below.\n" +
+            "Today's target styles:\n- " + string.Join("\n- ", keywords) + "\n" +
+            "\n" +
+            "Styles ALREADY heavily used on this site recently (do NOT use them as the primary style):\n" +
+            avoidStyles + "\n" +
+            "\n" +
+            "The site ALREADY has components with these names (do NOT recreate or rename anything similar):\n- " +
+            avoidNames + "\n" +
             "\n" +
             "Rules:\n" +
+            "- Each component must use a DIFFERENT category AND a DIFFERENT visual style — no two items may look alike.\n" +
+            "- Combine today's target style with a fresh idea: new layout, new interaction, new color mood.\n" +
             "- Each component must be a SINGLE self-contained snippet (no frameworks).\n" +
             "- Output STRICT JSON only, no markdown, no explanation, exactly this shape:\n" +
             "{\n" +
             "  \"items\": [\n" +
             "    {\n" +
-            "      \"name\": \"Component name\",\n" +
+            "      \"name\": \"Component name (unique, descriptive, NOT similar to the existing list above)\",\n" +
             "      \"category\": \"one of: nav, hero, button, card, list, table, form, loader, modal, toast, tabs, accordion, badge, progress, carousel, marquee, counter, chat, footer, dropdown, pricing, scroll\",\n" +
             "      \"description\": \"Short description\",\n" +
-            "      \"tags\": [\"tag1\",\"tag2\"],\n" +
+            "      \"tags\": [\"<its target style keyword>\",\"tag2\",\"tag3\"],\n" +
             "      \"html\": \"<fragment html only>\",\n" +
             "      \"css\": \"raw css only, no <style> tag\",\n" +
             "      \"js\": \"raw js only, no <script> tag, can be empty string\"\n" +
@@ -231,7 +429,7 @@ public class TrendService
         var body = new
         {
             model,
-            temperature = 0.8,
+            temperature = 0.9,
             response_format = new { type = "json_object" },
             messages = new[]
             {
@@ -278,7 +476,7 @@ public class TrendService
                 if (!string.IsNullOrWhiteSpace(item.Html)) items.Add(item);
             }
         }
-        return items;
+        return items.Take(max).ToList();
     }
 
     private static string ToTitle(string input)

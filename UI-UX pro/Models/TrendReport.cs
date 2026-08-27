@@ -18,6 +18,12 @@ public class TrendReport
 
     public List<string> GeneratedItemIds { get; set; } = new();
 
+    /// <summary>Số item bị bỏ qua vì trùng lặp (tên hoặc nội dung đã tồn tại).</summary>
+    public int SkippedCount { get; set; }
+
+    /// <summary>Lý do bỏ qua từng item trùng.</summary>
+    public List<string> SkippedReasons { get; set; } = new();
+
     public string Status { get; set; } = "success";
 
     public string? Error { get; set; }

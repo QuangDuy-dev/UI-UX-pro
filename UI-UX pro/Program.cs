@@ -37,6 +37,13 @@ app.Configuration["Ai:MaxItemsPerRun"] = cfg.MaxItemsPerRun.ToString();
 // Seed: danh mục + template mẫu khi DB trống
 await SeedAsync(app.Services);
 
+// Backfill ContentHash cho các item cũ (chạy 1 lần, các lần sau không có gì để làm)
+using (var scope = app.Services.CreateScope())
+{
+    var animations = scope.ServiceProvider.GetRequiredService<AnimationService>();
+    await animations.BackfillContentHashesAsync();
+}
+
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {

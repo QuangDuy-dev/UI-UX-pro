@@ -96,6 +96,7 @@ public class AnimationService
         item.Id = ObjectId.GenerateNewId();
         item.CreatedAt = DateTime.UtcNow;
         item.UpdatedAt = DateTime.UtcNow;
+        item.ContentHash ??= ComputeContentHash(item.Html, item.Css, item.Js);
         await _items.InsertOneAsync(item);
     }
 
@@ -154,5 +155,49 @@ public class AnimationService
             i++;
         }
         return slug;
+    }
+
+    /// <summary>Chuẩn hoá tên để so sánh trùng lặp: lowercase, trim, gộp khoảng trắng.</summary>
+    public static string NormalizeName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "";
+        return string.Join(' ', name.ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>
+    /// Hash nội dung (Html+Css+Js, bỏ toàn bộ khoảng trắng) để phát hiện item trùng nhau
+    /// dù tên khác nhau — 2 component giống hệt nhau về mặt thị giác sẽ có cùng hash.
+    /// </summary>
+    public static string ComputeContentHash(string html, string css, string js)
+    {
+        static string Strip(string? s) => new((s ?? "").Where(c => !char.IsWhiteSpace(c)).ToArray());
+        var raw = Strip(html) + "\u0001" + Strip(css) + "\u0001" + Strip(js);
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    /// <summary>Lấy N tên animation mới nhất (dùng để LLM tránh tạo trùng).</summary>
+    public async Task<List<string>> GetRecentNamesAsync(int limit = 60)
+    {
+        return await _items.Find(_ => true)
+            .SortByDescending(x => x.CreatedAt)
+            .Limit(limit)
+            .Project(x => x.Name)
+            .ToListAsync();
+    }
+
+    /// <summary>Tính ContentHash cho các item cũ chưa có (chạy 1 lần khi app khởi động).</summary>
+    public async Task BackfillContentHashesAsync()
+    {
+        var filter = Builders<AnimationItem>.Filter.Or(
+            Builders<AnimationItem>.Filter.Eq(x => x.ContentHash, null),
+            Builders<AnimationItem>.Filter.Eq(x => x.ContentHash, ""));
+        var items = await _items.Find(filter).ToListAsync();
+        foreach (var item in items)
+        {
+            item.ContentHash = ComputeContentHash(item.Html, item.Css, item.Js);
+            await _items.ReplaceOneAsync(x => x.Id == item.Id, item);
+        }
     }
 }

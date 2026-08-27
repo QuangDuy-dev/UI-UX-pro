@@ -87,6 +87,8 @@ public class ApiController : ControllerBase
             error = report.Error,
             createdCount = report.GeneratedItemIds.Count,
             createdIds = report.GeneratedItemIds,
+            skippedCount = report.SkippedCount,
+            skippedReasons = report.SkippedReasons,
             reportId = report.Id.ToString()
         });
     }
@@ -105,7 +107,8 @@ public class ApiController : ControllerBase
             r.SourceUrls,
             r.Status,
             r.Error,
-            createdCount = r.GeneratedItemIds.Count
+            createdCount = r.GeneratedItemIds.Count,
+            skippedCount = r.SkippedCount
         }));
     }
 

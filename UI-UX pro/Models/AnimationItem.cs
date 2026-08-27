@@ -26,6 +26,9 @@ public class AnimationItem
 
     public string Js { get; set; } = "";
 
+    /// <summary>SHA-256 của Html+Css+Js (đã bỏ khoảng trắng) — dùng để chống trùng lặp nội dung.</summary>
+    public string? ContentHash { get; set; }
+
     public AnimationSource Source { get; set; } = AnimationSource.User;
 
     public ItemStatus Status { get; set; } = ItemStatus.Published;
