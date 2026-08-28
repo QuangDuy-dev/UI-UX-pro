@@ -65,41 +65,29 @@ public class TrendService
             report.Keywords = selectedKeywords;
 
             // Bật AI chỉ khi user bật ở Settings (admin.AiEnabled).
-            // Nếu LLM gọi lỗi (401 API key sai, 429, network...) thì tự fallback template
+            // Nếu LLM gọi lỗi (401 key sai, 429, network...) thì tự fallback template
             // để job luôn sinh được animation, không bao giờ lộ lỗi 401 từ provider.
             var skipped = new List<string>();
-            List<AnimationItem> items;
-            string? llmError = null;
-
-            if (admin.AiEnabled)
-            {
-                (items, llmError) = await TryGenerateWithLlmAsync(selectedKeywords, max);
-            }
-            else
-            {
-                items = GenerateFromTemplates(selectedKeywords, max, existingNames, existingHashes, templateUsage, skipped);
-            }
-
-            // Lưu với dedup THẬT: trùng tên chuẩn hoá HOẶC trùng nội dung (hash) -> BỎ QUA,
-            // không đổi slug thành -2, -3 rồi lưu tiếp như trước đây.
             var created = new List<string>();
+            string? llmError = null;
             var seenRunNames = new HashSet<string>(StringComparer.Ordinal);
             var seenRunHashes = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (var item in items)
+            // 1) Sinh bằng LLM (nếu bật AI)
+            if (admin.AiEnabled)
             {
-                var norm = AnimationService.NormalizeName(item.Name);
-                var hash = AnimationService.ComputeContentHash(item.Html, item.Css, item.Js);
-                if (!seenRunNames.Add(norm) || !seenRunHashes.Add(hash) ||
-                    existingNames.Contains(norm) || existingHashes.Contains(hash))
-                {
-                    skipped.Add($"Trùng: {item.Name}");
-                    continue;
-                }
+                var (llmItems, llmErr) = await TryGenerateWithLlmAsync(selectedKeywords, max);
+                llmError = llmErr;
+                await InsertUniqueAsync(llmItems, existingNames, existingHashes, seenRunNames, seenRunHashes, skipped, created);
+            }
 
-                item.Slug = await _animations.EnsureUniqueSlugAsync(item.Slug);
-                await _animations.CreateAsync(item);
-                created.Add(item.Id.ToString());
+            // 2) BÙ VÀO nếu chưa đủ max: item trùng bị chặn thì tự tìm template/palette khác
+            //    để luôn đạt đủ số lượng (LLM sinh ít/trùng, hoặc AI tắt -> template fill tới max).
+            if (created.Count < max)
+            {
+                var remaining = max - created.Count;
+                var tplItems = GenerateFromTemplates(selectedKeywords, remaining, existingNames, existingHashes, templateUsage, skipped);
+                await InsertUniqueAsync(tplItems, existingNames, existingHashes, seenRunNames, seenRunHashes, skipped, created);
             }
 
             report.GeneratedItemIds = created;
@@ -121,6 +109,39 @@ public class TrendService
             report.Error = ex.Message;
             await _db.TrendReports.InsertOneAsync(report);
             return report;
+        }
+    }
+
+    /// <summary>
+    /// Lưu item với dedup THẬT: trùng tên chuẩn hoá HOẶC trùng nội dung (hash) -> BỎ QUA
+    /// (không đổi slug thành -2, -3 rồi lưu tiếp như trước đây). Tên/hash của item đã lưu
+    /// được thêm vào tập existing để các lần sinh sau trong cùng run không tạo lại.
+    /// </summary>
+    private async Task InsertUniqueAsync(
+        List<AnimationItem> items,
+        HashSet<string> existingNames,
+        HashSet<string> existingHashes,
+        HashSet<string> seenRunNames,
+        HashSet<string> seenRunHashes,
+        List<string> skipped,
+        List<string> created)
+    {
+        foreach (var item in items)
+        {
+            var norm = AnimationService.NormalizeName(item.Name);
+            var hash = AnimationService.ComputeContentHash(item.Html, item.Css, item.Js);
+            if (!seenRunNames.Add(norm) || !seenRunHashes.Add(hash) ||
+                existingNames.Contains(norm) || existingHashes.Contains(hash))
+            {
+                skipped.Add($"Trùng: {item.Name}");
+                continue;
+            }
+
+            existingNames.Add(norm);
+            existingHashes.Add(hash);
+            item.Slug = await _animations.EnsureUniqueSlugAsync(item.Slug);
+            await _animations.CreateAsync(item);
+            created.Add(item.Id.ToString());
         }
     }
 
@@ -229,126 +250,117 @@ public class TrendService
         Dictionary<string, int>? templateUsage = null,
         List<string>? skipped = null)
     {
-        const int maxVariantsPerTemplate = 3; // mỗi template tối đa 3 biến thể (gốc + 2 palette)
+        if (max <= 0) return new List<AnimationItem>();
+
         var templates = TemplateLibrary.All.ToList();
-        var selected = new List<AnimationTemplate>();
+        var keywordList = keywords.Count > 0 ? keywords : new List<string> { "animation" };
 
-        bool UsageOk(AnimationTemplate t) =>
-            templateUsage is null || templateUsage.GetValueOrDefault(t.Name) < maxVariantsPerTemplate;
+        // 1) Thứ tự ưu tiên template: khớp keyword -> chưa dùng (trải đều category) -> còn lại
+        var ordered = new List<AnimationTemplate>();
 
-        // 1) Khớp keyword với template còn dùng được (chưa vượt số biến thể tối đa)
-        foreach (var kw in keywords)
+        // 1a) Khớp keyword với template (name/tags/category chứa keyword)
+        foreach (var kw in keywordList)
         {
-            if (selected.Count >= max) break;
             var k = kw.ToLowerInvariant();
             var match = templates.FirstOrDefault(t =>
-                UsageOk(t) && (
-                    t.Name.ToLowerInvariant().Contains(k) ||
-                    t.Tags.Any(tag => tag.ToLowerInvariant().Contains(k)) ||
-                    t.CategorySlug.Contains(k) ||
-                    t.CategoryName.ToLowerInvariant().Contains(k)));
-
+                t.Name.ToLowerInvariant().Contains(k) ||
+                t.Tags.Any(tag => tag.ToLowerInvariant().Contains(k)) ||
+                t.CategorySlug.Contains(k) ||
+                t.CategoryName.ToLowerInvariant().Contains(k));
             if (match is not null)
             {
-                selected.Add(match);
+                ordered.Add(match);
                 templates.Remove(match);
             }
         }
 
-        // 2) Bổ sung: template chưa dùng, trải đều category (round-robin qua từng nhóm)
-        if (selected.Count < max)
+        // 1b) Template chưa từng dùng (usage == 0), trải đều category round-robin
+        var unused = templates.Where(t => templateUsage is null || templateUsage.GetValueOrDefault(t.Name) == 0).ToList();
+        var byCategory = unused.GroupBy(t => t.CategorySlug).ToList();
+        var longest = byCategory.Count == 0 ? 0 : byCategory.Max(g => g.Count());
+        for (int i = 0; i < longest; i++)
         {
-            var pool = templates.Where(UsageOk).ToList();
-            var byCategory = pool.GroupBy(t => t.CategorySlug).ToList();
-            var longest = byCategory.Count == 0 ? 0 : byCategory.Max(g => g.Count());
-            for (int i = 0; i < longest && selected.Count < max; i++)
+            foreach (var g in byCategory)
             {
-                foreach (var g in byCategory)
+                if (i < g.Count())
                 {
-                    if (selected.Count >= max) break;
-                    if (i < g.Count())
-                    {
-                        selected.Add(g.ElementAt(i));
-                        templates.Remove(g.ElementAt(i));
-                    }
+                    ordered.Add(g.ElementAt(i));
+                    templates.Remove(g.ElementAt(i));
                 }
             }
         }
 
-        // 3) Vẫn thiếu: cho phép dùng template đã vượt cap (chỉ khi hết lựa chọn mới)
-        if (selected.Count < max)
-        {
-            foreach (var t in templates)
-            {
-                if (selected.Count >= max) break;
-                selected.Add(t);
-                templates.Remove(t);
-            }
-        }
+        // 1c) Các template còn lại (đã dùng -> chỉ tạo biến thể màu mới nếu palette chưa trùng)
+        ordered.AddRange(templates);
 
-        if (selected.Count == 0)
-            selected = TemplateLibrary.All.Take(max).ToList();
+        if (ordered.Count == 0) ordered = TemplateLibrary.All.ToList();
 
         var palettes = new[]
         {
-            ("#22d3ee", "#6366f1", "#ec4899"),
-            ("#f472b6", "#8b5cf6", "#3b82f6"),
-            ("#34d399", "#14b8a6", "#0ea5e9"),
-            ("#fbbf24", "#f97316", "#ef4444"),
-            ("#a78bfa", "#ec4899", "#f43f5e"),
-            ("#38bdf8", "#818cf8", "#c084fc"),
-            ("#fde047", "#f59e0b", "#dc2626"),
-            ("#6ee7b7", "#2dd4bf", "#6366f1")
+            (Name: "Original", C1: "#22d3ee", C2: "#6366f1", C3: "#ec4899"),
+            (Name: "Sunset", C1: "#fbbf24", C2: "#f97316", C3: "#ef4444"),
+            (Name: "Mint", C1: "#34d399", C2: "#14b8a6", C3: "#0ea5e9"),
+            (Name: "Berry", C1: "#f472b6", C2: "#8b5cf6", C3: "#3b82f6"),
+            (Name: "Grape", C1: "#a78bfa", C2: "#ec4899", C3: "#f43f5e"),
+            (Name: "Sky", C1: "#38bdf8", C2: "#818cf8", C3: "#c084fc"),
+            (Name: "Flame", C1: "#fde047", C2: "#f59e0b", C3: "#dc2626"),
+            (Name: "Ocean", C1: "#6ee7b7", C2: "#2dd4bf", C3: "#6366f1")
         };
+        var paletteStart = Math.Abs(DateTime.UtcNow.DayOfYear) % palettes.Length;
 
         var items = new List<AnimationItem>();
         var seenNames = new HashSet<string>(StringComparer.Ordinal);
         var seenHashes = new HashSet<string>(StringComparer.Ordinal);
-        var keywordList = keywords.Count > 0 ? keywords : new List<string> { "animation" };
 
-        foreach (var (tpl, i) in selected.Select((t, i) => (t, i)))
+        // 2) Duyệt template theo thứ tự; với mỗi template thử dần 8 palette cho tới khi
+        //    tìm được tổ hợp KHÔNG trùng (tên + nội dung) — trùng thì bù bằng tổ hợp khác
+        //    hoặc template khác, đảm bảo luôn đủ max item mới.
+        for (int ti = 0; ti < ordered.Count && items.Count < max; ti++)
         {
-            if (items.Count >= max) break;
-            var keyword = keywordList[i % keywordList.Count];
-            var name = $"{tpl.Name} — {ToTitle(keyword)}";
-            var norm = AnimationService.NormalizeName(name);
-            if (!seenNames.Add(norm) || (existingNames?.Contains(norm) ?? false))
+            var tpl = ordered[ti];
+            var keyword = keywordList[items.Count % keywordList.Count];
+            var added = false;
+
+            for (int pi = 0; pi < palettes.Length && !added && items.Count < max; pi++)
             {
-                skipped?.Add($"Trùng tên template: {name}");
-                continue;
+                var palette = pi == 0
+                    ? palettes[0]
+                    : palettes[1 + ((paletteStart + pi - 1) % (palettes.Length - 1))];
+                var name = pi == 0
+                    ? $"{tpl.Name} — {ToTitle(keyword)}"
+                    : $"{tpl.Name} — {ToTitle(keyword)} · {palette.Name}";
+                var norm = AnimationService.NormalizeName(name);
+                if (seenNames.Contains(norm) || (existingNames?.Contains(norm) ?? false)) continue;
+
+                var css = tpl.Css
+                    .Replace("#22d3ee", palette.C1)
+                    .Replace("#6366f1", palette.C2)
+                    .Replace("#ec4899", palette.C3);
+                var hash = AnimationService.ComputeContentHash(tpl.Html, css, tpl.Js);
+                if (seenHashes.Contains(hash) || (existingHashes?.Contains(hash) ?? false)) continue;
+
+                seenNames.Add(norm);
+                seenHashes.Add(hash);
+                items.Add(new AnimationItem
+                {
+                    Name = name,
+                    Slug = AnimationService.Slugify(name),
+                    Description = tpl.Description,
+                    CategorySlug = tpl.CategorySlug,
+                    CategoryName = tpl.CategoryName,
+                    Tags = tpl.Tags.Concat(new[] { keyword.ToLowerInvariant(), palette.Name.ToLowerInvariant() }).Distinct().ToList(),
+                    Html = tpl.Html,
+                    Css = css,
+                    Js = tpl.Js,
+                    Source = AnimationSource.Daily,
+                    Status = ItemStatus.Published,
+                    IsPublic = true,
+                    TrendKeywords = new List<string>(keywords)
+                });
+                added = true;
             }
 
-            var (c1, c2, c3) = palettes[i % palettes.Length];
-            var css = tpl.Css
-                .Replace("#22d3ee", c1)
-                .Replace("#6366f1", c2)
-                .Replace("#ec4899", c3);
-
-            var item = new AnimationItem
-            {
-                Name = name,
-                Slug = AnimationService.Slugify(name),
-                Description = tpl.Description,
-                CategorySlug = tpl.CategorySlug,
-                CategoryName = tpl.CategoryName,
-                Tags = tpl.Tags.Concat(new[] { keyword.ToLowerInvariant() }).Distinct().ToList(),
-                Html = tpl.Html,
-                Css = css,
-                Js = tpl.Js,
-                Source = AnimationSource.Daily,
-                Status = ItemStatus.Published,
-                IsPublic = true,
-                TrendKeywords = new List<string>(keywords)
-            };
-
-            var hash = AnimationService.ComputeContentHash(item.Html, item.Css, item.Js);
-            if (!seenHashes.Add(hash) || (existingHashes?.Contains(hash) ?? false))
-            {
-                skipped?.Add($"Trùng nội dung template: {name}");
-                continue;
-            }
-
-            items.Add(item);
+            if (!added) skipped?.Add($"Hết biến thể mới: {tpl.Name}");
         }
 
         return items;
@@ -438,7 +450,7 @@ public class TrendService
             }
         };
 
-        using var client = new HttpClient();
+        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(4) };
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
         var json = JsonSerializer.Serialize(body);
