@@ -18,5 +18,5 @@ appsettings.Production.json
 admin-config.json
 
 # appsettings.json chứa connection string MongoDB (có password) + master password admin.
-# Nếu repo này public, dời các giá trị nhạy cảm sang user-secrets và bỏ comment dòng dưới:
-# appsettings.json
+# KHÔNG commit file này — dùng env vars trên Render (dạng Key__SubKey, vd ConnectionStrings__MongoDb).
+appsettings.json
